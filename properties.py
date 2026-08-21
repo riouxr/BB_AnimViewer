@@ -3,6 +3,12 @@
 #
 #  Lives on the WindowManager: a flipbook session is a property of the running
 #  Blender, not of the .blend, and should not dirty the file or get saved into it.
+#
+#  The scrub control is a special case. An IntProperty fixes min/max at
+#  registration time, so clamping it in an update callback cannot stop a drag —
+#  Blender keeps feeding its own value in and the field sails past the last
+#  frame and into negatives. It is therefore re-declared, with the live bounds,
+#  whenever those bounds change. That also gives it a real slider.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import bpy
@@ -14,38 +20,56 @@ from bpy.types import PropertyGroup
 from . import session
 
 
-def _show(st, index):
-    """Move to *index* and display it, without re-entering the update callbacks."""
-    seq = session.get_sequence()
-    if not (seq and seq.count):
-        return
-    lo, hi = session.active_range(st, seq)
-    index = max(lo, min(index, hi))
-    st["frame_index"] = index
-    st["frame_number"] = seq.frames[index]
-    session.apply_frame()
+# ── the scrub control ───────────────────────────────────────────────────────
 
+def _scrub_changed(self, context):
+    """*self* is the WindowManager: this property is declared on the type."""
+    if session.is_syncing():
+        return              # our own write echoing back, not a user drag
+    seq = session.get_sequence()
+    if seq and seq.count:
+        session.show_index(seq.index_of(self.bbav_frame))
+
+
+def refresh_scrub():
+    """Re-declare the scrub property with the current frame bounds.
+
+    Called whenever the bounds move: a new sequence, or a change to the in/out
+    range. Blender then enforces the limits itself, during dragging and typing
+    alike, which an update callback cannot do.
+    """
+    st, seq = session.settings(), session.get_sequence()
+    if st and seq and seq.count:
+        lo, hi = session.active_range(st, seq)
+        low, high = seq.frames[lo], seq.frames[hi]
+    else:
+        low, high = 0, 0
+    high = max(low, high)
+
+    bpy.types.WindowManager.bbav_frame = IntProperty(
+        name="Frame",
+        description="Frame being shown. Drag to scrub the sequence",
+        default=low, min=low, max=high, soft_min=low, soft_max=high,
+        update=_scrub_changed,
+    )
+
+    # Re-declaring resets the stored value, so put the playhead back.
+    if st and seq and seq.count:
+        index = max(0, min(st.frame_index, seq.count - 1))
+        session.set_scrub(seq.frames[index])
+
+
+# ── callbacks ───────────────────────────────────────────────────────────────
 
 def _frame_index_changed(self, context):
-    # IntProperty has no dynamic maximum, so the bounds are enforced here. The
-    # in/out range is the bound when it is active, which is what keeps scrubbing
-    # and stepping from leaving the range the user asked to review.
-    _show(self, self.frame_index)
-
-
-def _frame_number_changed(self, context):
-    """Scrubbing is done in real frame numbers; snap onto a frame that exists."""
-    seq = session.get_sequence()
-    if not (seq and seq.count):
-        return
-    lo, hi = session.active_range(self, seq)
-    number = max(seq.frames[lo], min(self.frame_number, seq.frames[hi]))
-    _show(self, seq.index_of(number))
+    session.show_index(self.frame_index)
 
 
 def _range_changed(self, context):
-    """Tightening the range around the playhead should pull the playhead in."""
-    _show(self, self.frame_index)
+    """Tightening the range around the playhead should pull the playhead in,
+    and the scrub control has to learn the new limits."""
+    session.show_index(self.frame_index)
+    refresh_scrub()
 
 
 def _playing_changed(self, context):
@@ -55,7 +79,7 @@ def _playing_changed(self, context):
         if seq and seq.count:
             lo, hi = session.active_range(self, seq)
             if self.loop_mode == 'ONCE' and self.frame_index >= hi:
-                _show(self, lo)
+                session.show_index(lo)
         session.start_clock()
 
 
@@ -73,17 +97,14 @@ class BBAV_Settings(PropertyGroup):
     image_name: StringProperty(name="Image", default="")
 
     # ── position ────────────────────────────────────────────────────────────
+    # The single source of truth. The frame number shown in the UI is derived
+    # from it; see refresh_scrub above.
     frame_index: IntProperty(
-        name="Frame",
+        name="Index",
         description="Position within the sequence. Holes on disk are skipped",
         default=0, min=0,
         update=_frame_index_changed,
-    )
-    frame_number: IntProperty(
-        name="Frame",
-        description="The frame number on disk. Drag to scrub the sequence",
-        default=0,
-        update=_frame_number_changed,
+        options={'HIDDEN'},
     )
     frame_count: IntProperty(name="Count", default=0, min=0)
     frame_first: IntProperty(name="First", default=0)
@@ -155,14 +176,17 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.WindowManager.bb_animviewer = bpy.props.PointerProperty(type=BBAV_Settings)
+    refresh_scrub()
 
 
 def unregister():
-    if hasattr(bpy.types.WindowManager, "bb_animviewer"):
-        try:
-            del bpy.types.WindowManager.bb_animviewer
-        except Exception:
-            pass
+    for owner, name in ((bpy.types.WindowManager, "bb_animviewer"),
+                        (bpy.types.WindowManager, "bbav_frame")):
+        if hasattr(owner, name):
+            try:
+                delattr(owner, name)
+            except Exception:
+                pass
     for cls in reversed(classes):
         try:
             bpy.utils.unregister_class(cls)

@@ -77,7 +77,7 @@ def _draw_adopt(layout):
                     text="Open in New Window", icon='WINDOW').here = False
 
 
-def _draw_transport(layout, st, seq):
+def _draw_transport(layout, wm, st, seq):
     row = layout.row(align=True)
     row.scale_y = 1.35
     row.operator("bb_animviewer.jump", text="", icon='REW').to = 'START'
@@ -89,20 +89,13 @@ def _draw_transport(layout, st, seq):
     row.operator("bb_animviewer.step", text="", icon='FRAME_NEXT').delta = 1
     row.operator("bb_animviewer.jump", text="", icon='FF').to = 'END'
 
-    lo, hi = session.active_range(st, seq)
-    span = max(1, hi - lo)
-    # A plain number field, not a slider: an IntProperty's soft range is fixed at
-    # registration, so a slider bar would be meaningless for an arbitrary frame
-    # range. The bar underneath carries the position instead.
-    layout.prop(st, "frame_number", text="Frame")
-    if hasattr(layout, "progress"):
-        factor = max(0.0, min(1.0, (st.frame_index - lo) / span))
-        layout.progress(factor=factor, type='BAR',
-                        text="%d / %d" % (st.frame_index - lo + 1, hi - lo + 1))
-    else:
-        info = layout.row()
-        info.alignment = 'CENTER'
-        info.label(text="%d / %d" % (st.frame_index - lo + 1, hi - lo + 1))
+    # One control, not two: a real slider showing the real frame number, hard
+    # limited to the range. Its bounds are re-declared by refresh_scrub whenever
+    # the sequence or the in/out range changes, which is what stops a drag from
+    # running past the last frame or into negatives.
+    row = layout.row(align=True)
+    row.scale_y = 1.2
+    row.prop(wm, "bbav_frame", text="Frame", slider=True)
 
 
 class BBAV_PT_transport(Panel):
@@ -130,7 +123,7 @@ class BBAV_PT_transport(Panel):
             layout.operator("bb_animviewer.open_sequence", icon='FILE_FOLDER')
             return
 
-        _draw_transport(layout, st, seq)
+        _draw_transport(layout, context.window_manager, st, seq)
 
         layout.separator()
         col = layout.column(align=True)

@@ -32,6 +32,10 @@ _timer_live = False
 # Last scene frame we reacted to, so the timeline can scrub the flipbook.
 _last_scene_frame = None
 
+# Set while we are pushing our own value into the scrub control, so its update
+# callback can tell a user drag from an echo of our own write.
+_syncing = False
+
 # Reload guard. bpy.app.timers keeps a reference to the *old* module's _tick
 # across a script reload, and is_registered() cannot match it against the new
 # function object, so it would keep firing and fight the fresh instance for the
@@ -177,6 +181,48 @@ def apply_frame(index=None):
     redraw()
 
 
+def is_syncing():
+    return _syncing
+
+
+def set_scrub(number):
+    """Push *number* into the scrub control without re-entering its callback.
+
+    The ID-property write used for PropertyGroup members does not work here: a
+    property declared straight onto a type does not read back through
+    wm["name"] — verified, the two hold different values — so this has to go
+    through RNA behind a re-entrancy flag.
+    """
+    global _syncing
+    wm = getattr(bpy.context, "window_manager", None)
+    if wm is None or not hasattr(wm, "bbav_frame"):
+        return
+    if wm.bbav_frame == number:
+        return
+    _syncing = True
+    try:
+        wm.bbav_frame = number
+    finally:
+        _syncing = False
+
+
+def show_index(index):
+    """Move the playhead to *index* and display it.
+
+    The single way the current frame changes. Writes go through the
+    ID-property dict so the update callbacks do not re-enter, and the scrub
+    control is kept in step with the real frame number.
+    """
+    st, seq = settings(), get_sequence()
+    if not (st and seq) or not seq.count:
+        return
+    lo, hi = active_range(st, seq)
+    index = max(lo, min(index, hi))
+    st["frame_index"] = index
+    set_scrub(seq.frames[index])
+    apply_frame()
+
+
 def current_number():
     seq, st = get_sequence(), settings()
     if not (seq and st) or not seq.count:
@@ -281,8 +327,9 @@ def _sync_scene_frame():
 
     lo, hi = active_range(st, seq)
     number = max(seq.frames[lo], min(scene_frame, seq.frames[hi]))
-    if number != st.frame_number:
-        st.frame_number = number        # update callback shows it
+    index = max(lo, min(seq.index_of(number), hi))
+    if index != st.frame_index:
+        show_index(index)
     else:
         _repin()
 
@@ -463,9 +510,9 @@ def open_viewer(context, seq, index=0, space=None):
     st["range_end"] = seq.count - 1
     st.ping_dir = 1
     st.playing = False
-    index = max(0, min(index, seq.count - 1))
-    st["frame_index"] = index
-    st["frame_number"] = seq.frames[index]
+    st["frame_index"] = max(0, min(index, seq.count - 1))
+    from . import properties          # lazy: properties imports this module
+    properties.refresh_scrub()
 
     global _last_scene_frame
     _last_scene_frame = bpy.context.scene.frame_current

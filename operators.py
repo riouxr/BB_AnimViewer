@@ -155,9 +155,9 @@ class BBAV_OT_reload(Operator):
         st.seq_label = fresh.label()
         if st.range_end >= old.count - 1 or st.range_end == 0:
             st.range_end = fresh.count - 1
-        index = fresh.index_of(number)
-        st["frame_index"] = index
-        st["frame_number"] = fresh.frames[index]
+        st["frame_index"] = fresh.index_of(number)
+        from . import properties
+        properties.refresh_scrub()
 
         image = session.viewer_space().image
         if image:
