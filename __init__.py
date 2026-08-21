@@ -55,7 +55,10 @@ def unregister():
     session.set_sequence(None)
 
     for mod in reversed(modules):
-        mod.unregister()
+        try:
+            mod.unregister()
+        except Exception as ex:            # never strand a half-torn-down addon
+            print("BB AnimViewer: %s.unregister() failed: %s" % (mod.__name__, ex))
 
 
 if __name__ == "__main__":

@@ -159,6 +159,12 @@ def register():
 
 def unregister():
     if hasattr(bpy.types.WindowManager, "bb_animviewer"):
-        del bpy.types.WindowManager.bb_animviewer
+        try:
+            del bpy.types.WindowManager.bb_animviewer
+        except Exception:
+            pass
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass

@@ -356,7 +356,18 @@ def register():
 
 
 def unregister():
-    bpy.types.IMAGE_HT_header.remove(draw_image_header)
-    bpy.types.TOPBAR_MT_render.remove(draw_render_menu)
+    # Tolerant teardown. If two copies of this addon are ever live at once (a
+    # dev copy on sys.path next to the installed extension, say) the first one
+    # out takes the shared bl_idnames with it, and a strict unregister would
+    # then raise and leave the second half torn down.
+    for owner, func in ((bpy.types.IMAGE_HT_header, draw_image_header),
+                        (bpy.types.TOPBAR_MT_render, draw_render_menu)):
+        try:
+            owner.remove(func)
+        except Exception:
+            pass
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass
