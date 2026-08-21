@@ -61,7 +61,8 @@ def _draw_transport(layout, st, seq):
     # range. The bar underneath carries the position instead.
     layout.prop(st, "frame_number", text="Frame")
     if hasattr(layout, "progress"):
-        layout.progress(factor=(st.frame_index - lo) / span, type='BAR',
+        factor = max(0.0, min(1.0, (st.frame_index - lo) / span))
+        layout.progress(factor=factor, type='BAR',
                         text="%d / %d" % (st.frame_index - lo + 1, hi - lo + 1))
     else:
         info = layout.row()

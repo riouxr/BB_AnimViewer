@@ -282,10 +282,29 @@ def _focus_sidebar():
     return 0.1 if _focus_tries < 20 else None
 
 
-def _release_image():
-    existing = bpy.data.images.get(IMAGE_NAME)
-    if existing is not None and existing.users <= 1:
-        bpy.data.images.remove(existing)
+def _release_image(space=None):
+    """Drop the previous viewer image so repeated opens do not pile up datablocks.
+
+    Looking the image up by name alone is not enough: if the old one is still
+    referenced elsewhere the new load gets uniquified to BB_AnimViewer.001 and
+    the name lookup would keep finding the wrong one forever. The name check is
+    kept as a guard so an image the user loaded into the window by hand is never
+    removed from under them.
+    """
+    candidates = []
+    for image in (space.image if space is not None else None,
+                  bpy.data.images.get(IMAGE_NAME)):
+        # Usually the same datablock twice; removing it once frees the other
+        # reference, so de-duplicate before touching any of them.
+        if image is not None and not any(image == seen for seen in candidates):
+            candidates.append(image)
+
+    for image in candidates:
+        try:
+            if image.name.startswith(IMAGE_NAME) and image.users <= 1:
+                bpy.data.images.remove(image)
+        except ReferenceError:
+            pass
 
 
 def open_viewer(context, seq, index=0):
@@ -322,7 +341,7 @@ def open_viewer(context, seq, index=0):
         _focus_tries = 0
         bpy.app.timers.register(_focus_sidebar, first_interval=0.05)
 
-    _release_image()
+    _release_image(space)
     image = bpy.data.images.load(seq.path_at(index), check_existing=False)
     image.name = IMAGE_NAME
     image.source = 'FILE' if seq.is_still else 'SEQUENCE'
