@@ -14,17 +14,23 @@ from bpy.types import PropertyGroup
 from . import session
 
 
-def _frame_index_changed(self, context):
-    # IntProperty has no dynamic maximum, so the range is clamped here instead.
-    # Assigning through the ID-property dict deliberately skips these callbacks,
-    # which is what keeps index and number from bouncing off each other.
+def _show(st, index):
+    """Move to *index* and display it, without re-entering the update callbacks."""
     seq = session.get_sequence()
-    if seq and seq.count:
-        clamped = max(0, min(self.frame_index, seq.count - 1))
-        if clamped != self.frame_index:
-            self["frame_index"] = clamped
-        self["frame_number"] = seq.frames[clamped]
+    if not (seq and seq.count):
+        return
+    lo, hi = session.active_range(st, seq)
+    index = max(lo, min(index, hi))
+    st["frame_index"] = index
+    st["frame_number"] = seq.frames[index]
     session.apply_frame()
+
+
+def _frame_index_changed(self, context):
+    # IntProperty has no dynamic maximum, so the bounds are enforced here. The
+    # in/out range is the bound when it is active, which is what keeps scrubbing
+    # and stepping from leaving the range the user asked to review.
+    _show(self, self.frame_index)
 
 
 def _frame_number_changed(self, context):
@@ -32,11 +38,14 @@ def _frame_number_changed(self, context):
     seq = session.get_sequence()
     if not (seq and seq.count):
         return
-    number = max(seq.first, min(self.frame_number, seq.last))
-    index = seq.index_of(number)
-    self["frame_index"] = index
-    self["frame_number"] = seq.frames[index]
-    session.apply_frame()
+    lo, hi = session.active_range(self, seq)
+    number = max(seq.frames[lo], min(self.frame_number, seq.frames[hi]))
+    _show(self, seq.index_of(number))
+
+
+def _range_changed(self, context):
+    """Tightening the range around the playhead should pull the playhead in."""
+    _show(self, self.frame_index)
 
 
 def _playing_changed(self, context):
@@ -46,8 +55,7 @@ def _playing_changed(self, context):
         if seq and seq.count:
             lo, hi = session.active_range(self, seq)
             if self.loop_mode == 'ONCE' and self.frame_index >= hi:
-                self["frame_index"] = lo
-                session.apply_frame()
+                _show(self, lo)
         session.start_clock()
 
 
@@ -60,6 +68,9 @@ class BBAV_Settings(PropertyGroup):
         default="",
     )
     seq_label: StringProperty(name="Label", default="")
+    # Name of the image datablock this session drives. Any Image Editor showing
+    # it counts as a viewer, which is how the render window can be adopted.
+    image_name: StringProperty(name="Image", default="")
 
     # ── position ────────────────────────────────────────────────────────────
     frame_index: IntProperty(
@@ -85,6 +96,12 @@ class BBAV_Settings(PropertyGroup):
         default=False,
         update=_playing_changed,
     )
+    use_scene_fps: BoolProperty(
+        name="Scene FPS",
+        description="Play at the scene's render frame rate. "
+                    "Turn off to set a rate just for reviewing",
+        default=True,
+    )
     fps: FloatProperty(
         name="FPS",
         description="Playback rate in frames per second",
@@ -101,6 +118,13 @@ class BBAV_Settings(PropertyGroup):
         ],
         default='LOOP',
     )
+    sync_scene_frame: BoolProperty(
+        name="Follow Timeline",
+        description="Scrubbing the scene timeline scrubs the viewer, matching frame "
+                    "numbers. One-way: playback here does not move the scene frame, "
+                    "which is what keeps it from evaluating the scene on every frame",
+        default=True,
+    )
     drop_frames: BoolProperty(
         name="Drop Frames",
         description="Hold the frame rate by skipping frames when playback cannot keep up. "
@@ -112,11 +136,12 @@ class BBAV_Settings(PropertyGroup):
     # ── in / out ────────────────────────────────────────────────────────────
     use_range: BoolProperty(
         name="Use In/Out",
-        description="Restrict playback to a sub-range of the sequence",
+        description="Restrict playback and scrubbing to a sub-range of the sequence",
         default=False,
+        update=_range_changed,
     )
-    range_start: IntProperty(name="In", default=0, min=0)
-    range_end: IntProperty(name="Out", default=0, min=0)
+    range_start: IntProperty(name="In", default=0, min=0, update=_range_changed)
+    range_end: IntProperty(name="Out", default=0, min=0, update=_range_changed)
 
     # ── display ─────────────────────────────────────────────────────────────
     show_channels: BoolProperty(name="Channels", default=True)

@@ -5,29 +5,42 @@ an image sequence at a bare window and gives you nothing to drive it with — no
 no frame stepping, no way to look at a different channel. This is that window, with
 the controls attached.
 
-**Location:** `Render ▶ BB AnimViewer`
+**Location:** `Render ▶ BB AnimViewer`, and the sidebar of the window Blender opens
+when you render.
 
 ---
 
 ## What it does
 
+* **Review straight from the render window.** When a render opens its own window,
+  its `Viewer` sidebar tab has a **Review Rendered Frames** button that turns that
+  window into the flipbook in place — no closing it and going back to the Render menu.
+  The menu is still there when you want it.
 * **Transport** — play, pause, step a frame at a time, jump to either end, scrub by
   typing or dragging a real frame number.
-* **Loop, ping-pong or play once**, at any frame rate, independent of the scene's.
-* **In / out points** to review a sub-range.
+* **Loop, ping-pong or play once**, at the scene's render frame rate by default;
+  untick **Scene FPS** to set a review rate of your own.
+* **In / out points** to review a sub-range. Scrubbing, stepping and playback all
+  stay inside it, and tightening it pulls the playhead in with it.
+* **Follow Timeline** — scrubbing the scene timeline scrubs the viewer, matching
+  frame numbers, so the rendered frame 7 is the one you land on.
 * **Channels** — RGB, RGBA, Alpha, Z, and single R / G / B isolation.
 * **EXR layers and passes** — every layer, pass and view inside a multilayer EXR,
   not just RGBAZ. The Sequence panel also lists what a frame actually contains,
   read straight from the EXR header.
 * **Colour management** — view transform, look, exposure and gamma, right next to
-  the image where you need them for float EXRs.
+  the image where you need them for float EXRs. These are the scene's own view
+  settings, the same datablock as `Render Properties ▶ Color Management`, so the
+  viewer shows the render graded exactly as the render was.
 * **Holes are skipped.** The frame list is the files that are really on disk, so a
   half-finished render steps 1004 → 1007 instead of flashing missing frames.
 * **Reload** re-scans the folder, so you can keep the viewer open while a render
   fills the directory in.
 
-It never touches `scene.frame_current`, so it will not disturb your scene or trigger
-depsgraph evaluation while you review.
+It never writes `scene.frame_current`, so it will not disturb your scene or trigger
+depsgraph evaluation while you review. Timeline following is deliberately one-way for
+that reason: the timeline scrubs the viewer, but playback here does not drive the
+timeline.
 
 ---
 

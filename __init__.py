@@ -6,7 +6,7 @@
 bl_info = {
     "name":        "BB AnimViewer",
     "author":      "Blender Bob + Claude.ai",
-    "version":     (1, 0, 0),
+    "version":     (1, 1, 0),
     "blender":     (4, 2, 0),
     "location":    "Render › BB AnimViewer",
     "description": "Flipbook viewer for image sequences with transport controls "

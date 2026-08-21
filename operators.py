@@ -32,6 +32,16 @@ def _viewer_focused(context):
     return session.is_viewer_space(space)
 
 
+def _target_space(op, context):
+    """The Image Editor to adopt, when the operator was asked to open in place."""
+    if not getattr(op, "here", False):
+        return None
+    space = getattr(context, "space_data", None)
+    if space is not None and space.type == 'IMAGE_EDITOR':
+        return space
+    return None
+
+
 # ── opening ─────────────────────────────────────────────────────────────────
 
 class BBAV_OT_open_sequence(Operator):
@@ -43,6 +53,11 @@ class BBAV_OT_open_sequence(Operator):
     filepath: StringProperty(subtype='FILE_PATH')
     filter_image: BoolProperty(default=True, options={'HIDDEN'})
     filter_folder: BoolProperty(default=True, options={'HIDDEN'})
+    here: BoolProperty(
+        name="Open Here",
+        description="Take over this image editor instead of opening a new window",
+        default=False, options={'SKIP_SAVE'},
+    )
 
     def invoke(self, context, event):
         st = context.window_manager.bb_animviewer
@@ -69,7 +84,7 @@ class BBAV_OT_open_sequence(Operator):
                 return {'CANCELLED'}
 
         index = seq.index_of(_number_of(path)) if not seq.is_still else 0
-        error = session.open_viewer(context, seq, index)
+        error = session.open_viewer(context, seq, index, space=_target_space(self, context))
         if error:
             self.report({'ERROR'}, error)
             return {'CANCELLED'}
@@ -88,6 +103,12 @@ class BBAV_OT_open_render_output(Operator):
     bl_label = "Open Render Output"
     bl_options = {'REGISTER'}
 
+    here: BoolProperty(
+        name="Open Here",
+        description="Take over this image editor instead of opening a new window",
+        default=False, options={'SKIP_SAVE'},
+    )
+
     def execute(self, context):
         directory = seqmod.resolve_render_output(context.scene)
         if not directory or not os.path.isdir(directory):
@@ -99,7 +120,7 @@ class BBAV_OT_open_render_output(Operator):
             self.report({'ERROR'}, "No rendered frames in %s" % directory)
             return {'CANCELLED'}
 
-        error = session.open_viewer(context, found[0], 0)
+        error = session.open_viewer(context, found[0], 0, space=_target_space(self, context))
         if error:
             self.report({'ERROR'}, error)
             return {'CANCELLED'}

@@ -1,23 +1,37 @@
 # ─────────────────────────────────────────────────────────────────────────────
-#  BB AnimViewer – Render menu entry and the viewer window's sidebar
+#  BB AnimViewer – Render menu entry and the viewer sidebar
 #
-#  The panels are deliberately scoped to the viewer window: their poll checks
-#  that the image editor being drawn is one we opened, so a normal Image Editor
-#  the user happens to have open is left untouched.
+#  The panels appear in two places: any Image Editor hosting the session, and
+#  the window Blender opens for a render — so the frames you just rendered can
+#  be reviewed without closing that window first. A plain Image Editor the user
+#  is working in is left alone.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
 
 import bpy
-from bpy.types import Header, Menu, Panel
+from bpy.types import Menu, Panel
 
 from . import exr
 from . import session
 
 
 def _in_viewer(context):
+    """This editor is hosting the flipbook session."""
     space = context.space_data
     return space and space.type == 'IMAGE_EDITOR' and session.is_viewer_space(space)
+
+
+def _is_render_window(context):
+    """This editor is showing a render result, ours or Blender's own."""
+    space = context.space_data
+    if not space or space.type != 'IMAGE_EDITOR' or space.image is None:
+        return False
+    return space.image.type in {'RENDER_RESULT', 'COMPOSITING'}
+
+
+def _panel_visible(context):
+    return _in_viewer(context) or _is_render_window(context)
 
 
 # ── Render menu ─────────────────────────────────────────────────────────────
@@ -41,6 +55,27 @@ def draw_render_menu(self, context):
 
 
 # ── transport ───────────────────────────────────────────────────────────────
+
+def _draw_adopt(layout):
+    """Shown in a render window that has not been turned into a flipbook yet."""
+    col = layout.column(align=True)
+    col.scale_y = 1.2
+    props = col.operator("bb_animviewer.open_render_output",
+                         text="Review Rendered Frames", icon='SEQUENCE')
+    props.here = True
+    props = col.operator("bb_animviewer.open_sequence",
+                         text="Open Sequence...", icon='FILE_FOLDER')
+    props.here = True
+
+    col = layout.column(align=True)
+    col.scale_y = 0.85
+    col.label(text="Plays the frames written to disk,")
+    col.label(text="in this window.")
+
+    layout.separator()
+    layout.operator("bb_animviewer.open_render_output",
+                    text="Open in New Window", icon='WINDOW').here = False
+
 
 def _draw_transport(layout, st, seq):
     row = layout.row(align=True)
@@ -79,12 +114,17 @@ class BBAV_PT_transport(Panel):
 
     @classmethod
     def poll(cls, context):
-        return _in_viewer(context)
+        return _panel_visible(context)
 
     def draw(self, context):
         layout = self.layout
         st = context.window_manager.bb_animviewer
         seq = session.get_sequence()
+
+        if not _in_viewer(context):
+            _draw_adopt(layout)
+            return
+
         if seq is None or not seq.count:
             layout.label(text="No sequence loaded", icon='INFO')
             layout.operator("bb_animviewer.open_sequence", icon='FILE_FOLDER')
@@ -94,14 +134,24 @@ class BBAV_PT_transport(Panel):
 
         layout.separator()
         col = layout.column(align=True)
-        col.prop(st, "fps")
+        col.prop(st, "use_scene_fps")
+        sub = col.row(align=True)
+        if st.use_scene_fps:
+            sub.enabled = False
+            sub.label(text="%.4g fps (scene)" % session.scene_fps())
+        else:
+            sub.prop(st, "fps")
         col.prop(st, "loop_mode", text="")
+
+        col = layout.column(align=True)
         col.prop(st, "drop_frames")
+        col.prop(st, "sync_scene_frame")
 
         layout.separator()
         row = layout.row(align=True)
         row.operator("bb_animviewer.reload", icon='FILE_REFRESH')
         row.operator("bb_animviewer.fit_view", text="Fit", icon='ZOOM_ALL')
+        layout.operator("bb_animviewer.close", text="Close Viewer", icon='X')
 
 
 class BBAV_PT_range(Panel):
@@ -208,12 +258,18 @@ class BBAV_PT_color(Panel):
     def draw(self, context):
         layout = self.layout
         view = context.scene.view_settings
+        # The scene's own view settings — the same datablock as Render
+        # Properties > Color Management, so what you see here is what the render
+        # was graded with.
         col = layout.column(align=True)
         col.prop(view, "view_transform", text="")
         col.prop(view, "look", text="")
         col = layout.column(align=True)
         col.prop(view, "exposure")
         col.prop(view, "gamma")
+        col = layout.column(align=True)
+        col.scale_y = 0.85
+        col.label(text="Shared with Render Properties.")
 
 
 class BBAV_PT_info(Panel):

@@ -29,6 +29,9 @@ _sequence = None
 _last_tick = 0.0
 _timer_live = False
 
+# Last scene frame we reacted to, so the timeline can scrub the flipbook.
+_last_scene_frame = None
+
 # Reload guard. bpy.app.timers keeps a reference to the *old* module's _tick
 # across a script reload, and is_registered() cannot match it against the new
 # function object, so it would keep firing and fight the fresh instance for the
@@ -75,7 +78,39 @@ def set_sequence(seq):
     _sequence = seq
 
 
+def session_image():
+    """The image datablock this session drives, if it still exists."""
+    st = settings()
+    if st is None or not st.image_name:
+        return None
+    return bpy.data.images.get(st.image_name)
+
+
 def iter_viewer_areas():
+    """Every Image Editor currently showing the session image.
+
+    Membership is by displayed datablock, not by window: that way the popup
+    window this addon opens and a render window the user adopted are both
+    first-class hosts, and the controls follow the image rather than the frame
+    it happens to be sitting in.
+    """
+    wm = getattr(bpy.context, "window_manager", None)
+    image = session_image()
+    if not wm or image is None:
+        return
+    for win in wm.windows:
+        screen = win.screen
+        if not screen:
+            continue
+        for area in screen.areas:
+            if area.type != 'IMAGE_EDITOR':
+                continue
+            if area.spaces.active.image == image:
+                yield win, area
+
+
+def iter_popup_areas():
+    """Only the windows this addon opened for itself."""
     wm = getattr(bpy.context, "window_manager", None)
     if not wm:
         return
@@ -99,11 +134,11 @@ def viewer_open():
 
 
 def is_viewer_space(space):
-    """True when *space* is the image editor belonging to an open viewer window."""
-    for _win, area in iter_viewer_areas():
-        if area.spaces.active == space:
-            return True
-    return False
+    """True when *space* is an image editor hosting the session."""
+    image = session_image()
+    if image is None or space is None or space.type != 'IMAGE_EDITOR':
+        return False
+    return space.image == image
 
 
 def redraw():
@@ -170,6 +205,18 @@ def active_range(st, seq):
 
 # ── playback clock ──────────────────────────────────────────────────────────
 
+def scene_fps(scene=None):
+    """The scene's render frame rate, honouring the NTSC-style fps_base."""
+    scene = scene or bpy.context.scene
+    render = scene.render
+    return max(0.1, render.fps / max(1e-6, render.fps_base))
+
+
+def effective_fps(st):
+    """The rate playback actually runs at."""
+    return scene_fps() if st.use_scene_fps else max(0.1, st.fps)
+
+
 def _advance(st, seq, steps):
     lo, hi = active_range(st, seq)
     index = max(lo, min(st.frame_index, hi))
@@ -196,12 +243,48 @@ def _advance(st, seq, steps):
     st.frame_index = index      # update callback applies the frame
 
 
-def _guard_scene_frame():
-    """Re-pin if the user scrubbed the scene timeline out from under us."""
+def _repin():
+    """Re-pin frame_start so the displayed frame survives a scene frame change."""
     space = viewer_space()
     if space and space.image and space.image.source == 'SEQUENCE':
         if space.image_user.frame_start != bpy.context.scene.frame_current:
             apply_frame()
+
+
+def _sync_scene_frame():
+    """Let the scene timeline scrub the flipbook.
+
+    Rendered frames carry the scene's frame numbers, so dragging the timeline to
+    frame 7 should show frame 7. Mapping is by frame number, clamped into the
+    sequence; a scene frame with no matching file simply holds at the nearest.
+
+    Deliberately one-way. Driving scene.frame_current from playback would
+    evaluate the depsgraph on every frame, which is the cost this viewer exists
+    to avoid, so the timeline does not track the viewer during playback.
+    """
+    global _last_scene_frame
+    scene_frame = bpy.context.scene.frame_current
+
+    if _last_scene_frame is None:
+        _last_scene_frame = scene_frame
+        _repin()
+        return
+    if scene_frame == _last_scene_frame:
+        _repin()
+        return
+
+    _last_scene_frame = scene_frame
+    st, seq = settings(), get_sequence()
+    if not (st and seq and seq.count) or not st.sync_scene_frame:
+        _repin()
+        return
+
+    lo, hi = active_range(st, seq)
+    number = max(seq.frames[lo], min(scene_frame, seq.frames[hi]))
+    if number != st.frame_number:
+        st.frame_number = number        # update callback shows it
+    else:
+        _repin()
 
 
 def _tick():
@@ -218,10 +301,10 @@ def _tick():
         return None
 
     if not st.playing:
-        _guard_scene_frame()
+        _sync_scene_frame()
         return 0.25             # idle heartbeat, cheap
 
-    period = 1.0 / max(0.1, st.fps)
+    period = 1.0 / effective_fps(st)
     now = time.perf_counter()
     elapsed = now - _last_tick
     _last_tick = now
@@ -293,6 +376,7 @@ def _release_image(space=None):
     """
     candidates = []
     for image in (space.image if space is not None else None,
+                  session_image(),
                   bpy.data.images.get(IMAGE_NAME)):
         # Usually the same datablock twice; removing it once frees the other
         # reference, so de-duplicate before touching any of them.
@@ -307,8 +391,42 @@ def _release_image(space=None):
             pass
 
 
-def open_viewer(context, seq, index=0):
-    """Open (or reuse) the popup viewer window on *seq*.
+def _new_popup_window(context):
+    """Open the dedicated viewer window. Returns (space, error)."""
+    window = context.window
+    area = max(window.screen.areas, key=lambda a: a.width * a.height)
+    before = set(context.window_manager.windows)
+    with context.temp_override(window=window, area=area):
+        bpy.ops.wm.window_new()
+    new = [w for w in context.window_manager.windows if w not in before]
+    if not new:
+        return None, "Blender refused to open a new window"
+
+    win = new[0]
+    win.screen.name = SCREEN_PREFIX
+    area = win.screen.areas[0]
+    area.type = 'IMAGE_EDITOR'
+    space = area.spaces.active
+    space.display_channels = 'COLOR'
+    return space, None
+
+
+def _prepare_space(space):
+    global _focus_tries
+    space.mode = 'VIEW'
+    # A flipbook with its controls hidden behind N is not a flipbook.
+    space.show_region_ui = True
+    _focus_tries = 0
+    if not bpy.app.timers.is_registered(_focus_sidebar):
+        bpy.app.timers.register(_focus_sidebar, first_interval=0.05)
+
+
+def open_viewer(context, seq, index=0, space=None):
+    """Show *seq* in the viewer.
+
+    With *space* given, that Image Editor is adopted as the host — this is how
+    the window Blender opens for a render becomes the flipbook in place. Without
+    it, an existing host is reused, or the dedicated popup window is opened.
 
     Returns an error string, or None on success.
     """
@@ -318,47 +436,39 @@ def open_viewer(context, seq, index=0):
     st = settings()
     set_sequence(seq)
 
-    space = viewer_space()
-    if space is None:
-        window = context.window
-        area = max(window.screen.areas, key=lambda a: a.width * a.height)
-        before = set(context.window_manager.windows)
-        with context.temp_override(window=window, area=area):
-            bpy.ops.wm.window_new()
-        new = [w for w in context.window_manager.windows if w not in before]
-        if not new:
-            return "Blender refused to open a new window"
-        win = new[0]
-        win.screen.name = SCREEN_PREFIX
-        area = win.screen.areas[0]
-        area.type = 'IMAGE_EDITOR'
-        space = area.spaces.active
-        space.mode = 'VIEW'
-        space.display_channels = 'COLOR'
-        # A flipbook with its controls hidden behind N is not a flipbook.
-        space.show_region_ui = True
-        global _focus_tries
-        _focus_tries = 0
-        bpy.app.timers.register(_focus_sidebar, first_interval=0.05)
+    host = space if space is not None else viewer_space()
+    if host is None:
+        host, error = _new_popup_window(context)
+        if error:
+            return error
+    _prepare_space(host)
 
-    _release_image(space)
+    _release_image(host)
     image = bpy.data.images.load(seq.path_at(index), check_existing=False)
     image.name = IMAGE_NAME
     image.source = 'FILE' if seq.is_still else 'SEQUENCE'
-    space.image = image
+    host.image = image
+    st.image_name = image.name          # may have been uniquified on load
 
     st.filepath = seq.path_at(index)
     st.seq_label = seq.label()
     st.frame_count = seq.count
     st.frame_first = seq.first
     st.frame_last = seq.last
-    st.range_start = 0
-    st.range_end = seq.count - 1
+    # In/out points from a previous sequence mean nothing for this one. Written
+    # through the ID-property dict so the range callbacks do not fire and drag
+    # the playhead around before the new frame is even set.
+    st["use_range"] = False
+    st["range_start"] = 0
+    st["range_end"] = seq.count - 1
     st.ping_dir = 1
     st.playing = False
     index = max(0, min(index, seq.count - 1))
     st["frame_index"] = index
     st["frame_number"] = seq.frames[index]
+
+    global _last_scene_frame
+    _last_scene_frame = bpy.context.scene.frame_current
 
     apply_frame()
     fit_view()
@@ -380,15 +490,25 @@ def fit_view():
 
 
 def close_viewer(context):
+    """End the session: close our own window, and hand any adopted one back.
+
+    Only windows this addon opened are closed. A render window the user adopted
+    is left standing — removing the image datablock is enough to release it, and
+    closing someone else's window out from under them would be rude.
+    """
     st = settings()
     if st:
         st.playing = False
     stop_clock()
-    for win, _area in list(iter_viewer_areas()):
+
+    for win, _area in list(iter_popup_areas()):
         try:
             with context.temp_override(window=win):
                 bpy.ops.wm.window_close()
         except RuntimeError:
             pass
+
     _release_image()
     set_sequence(None)
+    if st:
+        st.image_name = ""
