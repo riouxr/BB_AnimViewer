@@ -24,7 +24,10 @@ when you render.
   stay inside it, and tightening it pulls the playhead in with it.
 * **Follow Timeline** — scrubbing the scene timeline scrubs the viewer, matching
   frame numbers, so the rendered frame 7 is the one you land on.
-* **Channels** — RGB, RGBA, Alpha, Z, and single R / G / B isolation.
+* **Channels** — colour, alpha and single R / G / B isolation. Only the channels the
+  image actually has are offered: an EXR pass carrying no alpha shows no Alpha button,
+  and Z appears only for a real Z buffer. The list re-checks itself as you switch
+  passes.
 * **EXR layers and passes** — every layer, pass and view inside a multilayer EXR,
   not just RGBAZ. The Sequence panel also lists what a frame actually contains,
   read straight from the EXR header.
@@ -57,15 +60,16 @@ bindings.
 | `Home` / `End` | First / last frame |
 | `Shift →` / `Shift ←` | Last / first frame |
 | `R` `G` `B` | Isolate red, green, blue |
-| `A` | Alpha |
-| `Z` | Depth |
+| `A` | Alpha (if the image has one) |
+| `Z` | Depth (if the image has a Z buffer) |
 | `C` | Back to full colour |
 | `I` / `O` | Set in / out point |
 | `L` | Cycle loop mode |
 | `F` | Fit image to window |
 | `F5` | Reload from disk |
 
-Pressing a channel key a second time returns to full colour.
+Pressing a channel key a second time returns to full colour. A key for a channel the
+current image does not carry reports that and does nothing.
 
 ---
 

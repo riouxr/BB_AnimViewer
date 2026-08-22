@@ -186,14 +186,6 @@ class BBAV_PT_range(Panel):
 
 # ── channels and layers ─────────────────────────────────────────────────────
 
-_CHANNEL_KEYS = (
-    ('COLOR', "RGB", 'IMAGE_RGB'),
-    ('COLOR_ALPHA', "RGBA", 'IMAGE_RGB_ALPHA'),
-    ('ALPHA', "Alpha", 'IMAGE_ALPHA'),
-    ('Z_BUFFER', "Z", 'IMAGE_ZDEPTH'),
-)
-
-
 class BBAV_PT_channels(Panel):
     bl_idname = "BBAV_PT_channels"
     bl_label = "Channels"
@@ -212,16 +204,16 @@ class BBAV_PT_channels(Panel):
         if image is None:
             return
 
-        col = layout.column(align=True)
-        row = col.row(align=True)
-        for value, label, icon in _CHANNEL_KEYS:
-            row.operator("bb_animviewer.channel", text=label, icon=icon,
-                         depress=(space.display_channels == value)).channel = value
-
-        row = col.row(align=True)
-        for value, label in (('RED', "R"), ('GREEN', "G"), ('BLUE', "B")):
-            row.operator("bb_animviewer.channel", text=label,
-                         depress=(space.display_channels == value)).channel = value
+        # Drawn by Blender rather than as our own buttons on purpose.
+        # display_channels is a dynamic enum: which items exist depends on what
+        # the current buffer actually holds, so an EXR pass with no alpha offers
+        # no Alpha, and only a real Z buffer offers Z. Python cannot read that
+        # resolved list — bl_rna reports all seven items regardless — so drawing
+        # our own buttons meant offering ones that raise on click. Letting
+        # Blender expand the enum shows exactly what is available, and re-checks
+        # every redraw as you switch passes.
+        grid = layout.grid_flow(row_major=True, columns=2, align=True)
+        grid.prop(space, "display_channels", expand=True)
 
         # Blender's own layer/pass/view dropdowns. These are the only way to
         # switch multilayer passes: ImageUser.multilayer_* is read-only to

@@ -313,7 +313,16 @@ class BBAV_OT_channel(Operator):
             return {'CANCELLED'}
         # Pressing the key of the channel already shown returns to full colour,
         # so r-r toggles rather than sticking.
-        space.display_channels = 'COLOR' if space.display_channels == self.channel else self.channel
+        target = 'COLOR' if space.display_channels == self.channel else self.channel
+        try:
+            space.display_channels = target
+        except TypeError:
+            # display_channels is a dynamic enum — an EXR pass carrying no alpha
+            # does not offer Alpha, and only a real Z buffer offers Z. Pressing
+            # the key for one of those is a no-op, not an error.
+            self.report({'INFO'}, "%s not available for this image"
+                                  % target.replace("_", " ").title())
+            return {'CANCELLED'}
         session.redraw()
         return {'FINISHED'}
 
