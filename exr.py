@@ -68,6 +68,29 @@ def _split_channel(name):
     return rest[0], ".".join(rest[1:]), comp
 
 
+def data_window_size(filepath):
+    """(width, height) from the EXR header's dataWindow, or None.
+
+    Header-only, like read_channels — used to size the viewer to the image
+    before Blender has decoded any pixels, avoiding a resize once it does.
+    """
+    try:
+        with open(filepath, "rb") as fh:
+            if fh.read(4) != MAGIC:
+                return None
+            fh.seek(0)
+            data = fh.read(_MAX_HEADER)
+    except OSError:
+        return None
+
+    for name, typ, payload in _read_attributes(data):
+        if name == "dataWindow" and len(payload) >= 16:
+            xmin, ymin, xmax, ymax = struct.unpack("<iiii", payload[:16])
+            w, h = xmax - xmin + 1, ymax - ymin + 1
+            return (w, h) if w > 0 and h > 0 else None
+    return None
+
+
 def read_channels(filepath):
     """Return the ordered channel-name list of an EXR, or None if not a readable EXR."""
     try:

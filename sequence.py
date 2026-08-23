@@ -10,6 +10,7 @@
 
 import os
 import re
+import struct
 
 # Non-greedy stem: for "Plate01.0001.png" a greedy stem would split as
 # ("Plate01.000", "1", ".png"). Non-greedy backtracks off the extension anchor
@@ -225,3 +226,71 @@ def pick(sequences, prefix=""):
         if matches:
             return matches[0]
     return sequences[0]
+
+
+# ── header-only pixel dimensions ────────────────────────────────────────────
+#
+# Blender's own image.size reads (0, 0) until the editor has actually decoded
+# the buffer via a real draw — too late to size the viewer without a visible
+# resize once it catches up. Reading width/height straight from the file
+# header sidesteps that: no pixel decode, just the handful of header bytes
+# every one of these formats stores its dimensions in.
+
+def _png_size(filepath):
+    try:
+        with open(filepath, "rb") as fh:
+            head = fh.read(24)
+    except OSError:
+        return None
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+        return None
+    w, h = struct.unpack(">II", head[16:24])
+    return (w, h) if w > 0 and h > 0 else None
+
+
+def _jpeg_size(filepath):
+    try:
+        with open(filepath, "rb") as fh:
+            data = fh.read(1 << 20)      # header markers live well inside 1 MB
+    except OSError:
+        return None
+    if len(data) < 4 or data[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    n = len(data)
+    # Start-of-Frame markers (baseline, progressive, arithmetic — every
+    # variant that carries a size, skipping the special fixed-length ones).
+    sof = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+          0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+    while i + 9 < n:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker in sof:
+            h, w = struct.unpack(">HH", data[i + 5:i + 9])
+            return (w, h) if w > 0 and h > 0 else None
+        if marker == 0xD8 or 0xD0 <= marker <= 0xD9 or marker == 0x01:
+            i += 2
+            continue
+        seg_len = struct.unpack(">H", data[i + 2:i + 4])[0]
+        i += 2 + seg_len
+    return None
+
+
+def probe_size(filepath):
+    """(width, height) read straight from the file header, or None.
+
+    None means "don't know without a real decode" — every caller must treat
+    that as a normal case (an unsupported format, a still, a truncated file),
+    not an error.
+    """
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == ".exr":
+        from . import exr
+        return exr.data_window_size(filepath)
+    if ext == ".png":
+        return _png_size(filepath)
+    if ext in (".jpg", ".jpeg"):
+        return _jpeg_size(filepath)
+    return None

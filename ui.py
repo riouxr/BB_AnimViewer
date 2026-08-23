@@ -368,7 +368,12 @@ def draw_image_header(self, context):
                  depress=st.playing).mode = 'TOGGLE'
     row.operator("bb_animviewer.step", text="", icon='FRAME_NEXT').delta = 1
     row.operator("bb_animviewer.jump", text="", icon='FF').to = 'END'
-    layout.label(text="%d" % session.current_number())
+    # Zero-padded to the sequence's own digit count (matching "####" elsewhere
+    # in this addon) so the label's pixel width never changes during playback —
+    # a plain "%d" reflows and visibly nudges every button to its left each
+    # time the frame number crosses a digit boundary (999 -> 1000).
+    digits = seq.padding or len(str(max(seq.last, 1)))
+    layout.label(text="%0*d" % (digits, session.current_number()))
 
 
 classes = (

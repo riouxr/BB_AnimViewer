@@ -609,11 +609,23 @@ def fit_view():
     retry loop, giving Blender's own redraw cycle the real ticks it needs.
 
     There is no property to set the view directly — View2D exposes only
-    region_to_view / view_to_region, both read-only queries — so framing goes
-    through view_all first for an immediate rough fit, then, once the buffer
-    is ready, computes exactly which region-pixel border, fit to the *whole*
+    region_to_view / view_to_region, both read-only queries — so framing
+    computes exactly which region-pixel border, once fit to the *whole*
     region by view_zoom_border, reproduces the image sized and centred inside
     the *visible* sub-area instead.
+
+    sequence.probe_size() reads the new image's real pixel dimensions straight
+    from its file header, skipping the wait for Blender's own (potentially
+    multi-tick, especially for a cold EXR) buffer decode whenever the format
+    is one it understands. Either way the correction itself still goes through
+    one deferred bpy.app.timers tick — verified necessary even with a known
+    size: view_zoom_border needs the region's view2d in a freshly-redrawn
+    state to actually take effect, the same first-draw timing problem
+    _focus_sidebar works around elsewhere in this addon, and there is no way
+    to force that redraw synchronously within the same call that is also
+    reliable. So there is always one brief view_all-then-correct step, just a
+    single short tick instead of however many a slow decode would otherwise
+    need.
     """
     for win, area in iter_viewer_areas():
         region = next((r for r in area.regions if r.type == 'WINDOW'), None)
@@ -623,12 +635,15 @@ def fit_view():
         space = area.spaces.active
         ov = dict(window=win, area=area, region=region)
 
+        path = current_path()
+        known_size = seqmod.probe_size(path) if path else None
+
         try:
             with bpy.context.temp_override(**ov):
                 bpy.ops.image.view_all(fit_view=True)
         except RuntimeError:
             pass
-        _start_fit_correction(area, region, ui_region, space, ov)
+        _start_fit_correction(area, region, ui_region, space, ov, known_size)
         return
 
 
@@ -638,10 +653,10 @@ _fit_state = None
 _FIT_MAX_TRIES = 40
 
 
-def _start_fit_correction(area, region, ui_region, space, override):
+def _start_fit_correction(area, region, ui_region, space, override, known_size):
     global _fit_tries, _fit_state
     _fit_tries = 0
-    _fit_state = (area, region, ui_region, space, override)
+    _fit_state = (area, region, ui_region, space, override, known_size)
     if not bpy.app.timers.is_registered(_fit_view_deferred):
         bpy.app.timers.register(_fit_view_deferred, first_interval=0.05)
 
@@ -650,12 +665,15 @@ def _fit_view_deferred():
     global _fit_tries, _fit_state
     if _fit_state is None:
         return None
-    area, region, ui_region, space, override = _fit_state
+    area, region, ui_region, space, override, known_size = _fit_state
     _fit_tries += 1
     try:
         for r in area.regions:
             r.tag_redraw()
-        done = _center_in_visible_area(region, ui_region, space, override)
+        if known_size:
+            done = _apply_border(region, ui_region, space, override, *known_size)
+        else:
+            done = _center_in_visible_area(region, ui_region, space, override)
     except (RuntimeError, ReferenceError):
         _fit_state = None
         return None
@@ -666,22 +684,36 @@ def _fit_view_deferred():
     return 0.05
 
 
-def _center_in_visible_area(region, ui_region, space, override):
-    """Try the correction once. True = done (applied, or nothing useful to do
-    and retrying would not help); False = the buffer was not ready, try again.
+def _apply_border(region, ui_region, space, override, iw, ih):
+    """Compute and apply the region-pixel border for a known (iw, ih) image
+    size. Returns True once applied, False if the geometry was degenerate.
+
+    view_zoom_border needs the region's view2d to be in a freshly-settled
+    (post-redraw) state to actually take effect — verified: called against a
+    view2d left over from an earlier, different fit with no redraw in
+    between, it returns FINISHED and silently changes nothing, leaving the
+    previous fit on screen wearing the new image's frame count. One forced
+    redraw first fixes it; it is a small, same-scale redraw of what was
+    already on screen; not the "wrong size, then correct" flash this whole
+    function exists to avoid.
     """
-    image = space.image
-    if image is None:
-        return True                     # session ended mid-retry — stop
-    iw, ih = image.size
     if iw <= 0 or ih <= 0:
-        return False                    # buffer still not decoded — retry
+        return False
+
+    region.tag_redraw()
+    if ui_region is not None:
+        ui_region.tag_redraw()
+    try:
+        with bpy.context.temp_override(**override):
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+    except RuntimeError:
+        pass
 
     vw, vh = region.width, region.height
     sidebar = ui_region.width if (ui_region is not None and space.show_region_ui) else 0
     avail_w = vw - sidebar
     if avail_w <= 0 or vh <= 0:
-        return True                     # degenerate window — won't improve on retry
+        return False
 
     scale = min(avail_w / iw, vh / ih) * _FIT_MARGIN
     disp_w, disp_h = iw * scale, ih * scale
@@ -699,7 +731,7 @@ def _center_in_visible_area(region, ui_region, space, override):
     xmin, ymin = v2d.view_to_region(border_view[0], border_view[1], clip=False)
     xmax, ymax = v2d.view_to_region(border_view[2], border_view[3], clip=False)
     if xmin == xmax or ymin == ymax:
-        return False                    # view2d not settled yet either — retry
+        return False
 
     try:
         with bpy.context.temp_override(**override):
@@ -707,7 +739,25 @@ def _center_in_visible_area(region, ui_region, space, override):
                 xmin=int(xmin), xmax=int(xmax), ymin=int(ymin), ymax=int(ymax),
                 wait_for_input=False, zoom_out=False)
     except RuntimeError:
-        return True                     # region gone — give up quietly
+        return False
+    global _primed_region
+    _primed_region = region
+    return True
+
+
+def _center_in_visible_area(region, ui_region, space, override):
+    """Deferred-path step: reads image.size once Blender has decoded it.
+
+    True = stop retrying (applied, or the size is known and further retries
+    would compute the same degenerate result); False = not decoded yet.
+    """
+    image = space.image
+    if image is None:
+        return True                     # session ended mid-retry — stop
+    iw, ih = image.size
+    if iw <= 0 or ih <= 0:
+        return False                    # buffer still not decoded — retry
+    _apply_border(region, ui_region, space, override, iw, ih)
     return True
 
 
@@ -722,6 +772,8 @@ def close_viewer(context):
     if st:
         st.playing = False
     stop_clock()
+    global _primed_region
+    _primed_region = None
 
     for win, _area in list(iter_popup_areas()):
         try:
