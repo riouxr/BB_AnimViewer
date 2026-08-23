@@ -28,14 +28,15 @@ MAX_FILES = 20000
 class Sequence:
     """One detected image sequence."""
 
-    __slots__ = ("directory", "stem", "ext", "padding", "frames")
+    __slots__ = ("directory", "stem", "ext", "padding", "frames", "mtime")
 
-    def __init__(self, directory, stem, ext, padding, frames):
+    def __init__(self, directory, stem, ext, padding, frames, mtime=0.0):
         self.directory = directory
         self.stem = stem
         self.ext = ext
         self.padding = padding
         self.frames = frames          # sorted list of real frame numbers
+        self.mtime = mtime            # when this version was last written
 
     # ── identity ────────────────────────────────────────────────────────────
     @property
@@ -109,7 +110,12 @@ class Sequence:
 
 
 def scan(directory):
-    """Return every sequence in *directory*, richest first.
+    """Return every sequence in *directory*, most recently written first.
+
+    Recency rather than frame count decides the order, because a folder holding
+    several versions of the same shot should offer the one just rendered — not
+    whichever has the most frames, and certainly not whichever sorts first
+    alphabetically, which put v001 ahead of v003.
 
     Single stills are returned too, as one-frame sequences, so the viewer can
     open a lone image without a special case.
@@ -144,9 +150,17 @@ def scan(directory):
     out = []
     for (stem, ext, padding), frames in groups.items():
         frames.sort()
-        out.append(Sequence(directory, stem, ext, padding, frames))
+        seq = Sequence(directory, stem, ext, padding, frames)
+        # One stat per sequence, on the highest-numbered frame: for a render
+        # that is the last frame written, and walking every file in a big
+        # directory to find the true maximum is not worth the I/O.
+        try:
+            seq.mtime = os.path.getmtime(seq.path_for(frames[-1]))
+        except OSError:
+            seq.mtime = 0.0
+        out.append(seq)
 
-    out.sort(key=lambda s: (-s.count, s.name.lower()))
+    out.sort(key=lambda s: (-s.mtime, -s.count, s.name.lower()))
     return out
 
 
@@ -168,13 +182,46 @@ def from_file(filepath):
     return None
 
 
-def resolve_render_output(scene):
-    """Best-guess directory for the scene's rendered frames."""
+def render_output_target(scene):
+    """(directory, name prefix) for the scene's render output.
+
+    The prefix is the part Blender puts before the frame number, and it is what
+    identifies *which* version was just rendered when several live side by side
+    in one folder. Empty when the output path names only a directory.
+    """
     import bpy
     path = bpy.path.abspath(scene.render.filepath)
     if not path:
-        return ""
+        return "", ""
     # A trailing separator means Blender appends its own frame numbers there.
     if path.endswith(("/", "\\")) or os.path.isdir(path):
-        return os.path.normpath(path)
-    return os.path.normpath(os.path.dirname(path))
+        return os.path.normpath(path), ""
+    directory, base = os.path.split(path)
+    # Blender substitutes the frame number for a run of "#", so the prefix is
+    # whatever precedes it — "ColoTest.####.png" renders "ColoTest.0001.png".
+    # With no "#" at all the number is appended to the whole basename instead,
+    # extension included, so that case must not be trimmed.
+    if "#" in base:
+        base = base.split("#", 1)[0]
+    return os.path.normpath(directory), base
+
+
+def resolve_render_output(scene):
+    """Best-guess directory for the scene's rendered frames."""
+    return render_output_target(scene)[0]
+
+
+def pick(sequences, prefix=""):
+    """The sequence the user most likely means out of *sequences*.
+
+    A prefix from the render output path wins, so re-rendering under a new name
+    shows that name. Otherwise the most recently written one, since scan()
+    already returns them newest first.
+    """
+    if not sequences:
+        return None
+    if prefix:
+        matches = [s for s in sequences if s.stem == prefix or s.stem.startswith(prefix)]
+        if matches:
+            return matches[0]
+    return sequences[0]

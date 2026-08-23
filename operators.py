@@ -76,7 +76,7 @@ class BBAV_OT_open_sequence(Operator):
             if not found:
                 self.report({'ERROR'}, "No image sequence in %s" % path)
                 return {'CANCELLED'}
-            seq = found[0]
+            seq = seqmod.pick(found)
         else:
             seq = seqmod.from_file(path)
             if seq is None:
@@ -110,7 +110,7 @@ class BBAV_OT_open_render_output(Operator):
     )
 
     def execute(self, context):
-        directory = seqmod.resolve_render_output(context.scene)
+        directory, prefix = seqmod.render_output_target(context.scene)
         if not directory or not os.path.isdir(directory):
             self.report({'ERROR'}, "Render output folder does not exist yet: %s" % (directory or "unset"))
             return {'CANCELLED'}
@@ -120,11 +120,18 @@ class BBAV_OT_open_render_output(Operator):
             self.report({'ERROR'}, "No rendered frames in %s" % directory)
             return {'CANCELLED'}
 
-        error = session.open_viewer(context, found[0], 0, space=_target_space(self, context))
+        seq = seqmod.pick(found, prefix)
+        error = session.open_viewer(context, seq, 0, space=_target_space(self, context))
         if error:
             self.report({'ERROR'}, error)
             return {'CANCELLED'}
-        self.report({'INFO'}, found[0].label())
+
+        # Say which one, and that there were others, so picking the wrong
+        # version is visible rather than silent.
+        if len(found) > 1:
+            self.report({'INFO'}, "%s  (%d versions in folder)" % (seq.label(), len(found)))
+        else:
+            self.report({'INFO'}, seq.label())
         return {'FINISHED'}
 
 

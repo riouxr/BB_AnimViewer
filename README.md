@@ -39,6 +39,11 @@ when you render.
   half-finished render steps 1004 → 1007 instead of flashing missing frames.
 * **Reload** re-scans the folder, so you can keep the viewer open while a render
   fills the directory in.
+* **Opens the version you just rendered.** With several versions side by side in one
+  folder, `Open Render Output` follows the name in your output path — render to
+  `shot_v003.####.exr` and that is what opens. Where the output path names only a
+  folder, the most recently written sequence wins, not the longest or the first
+  alphabetically.
 
 It never writes `scene.frame_current`, so it will not disturb your scene or trigger
 depsgraph evaluation while you review. Timeline following is deliberately one-way for
