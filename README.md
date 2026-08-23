@@ -44,6 +44,8 @@ when you render.
   `shot_v003.####.exr` and that is what opens. Where the output path names only a
   folder, the most recently written sequence wins, not the longest or the first
   alphabetically.
+* **Sequence List** — every version found alongside the one open, newest first,
+  expanded by default. Click a row to open that version, in the same window.
 
 It never writes `scene.frame_current`, so it will not disturb your scene or trigger
 depsgraph evaluation while you review. Timeline following is deliberately one-way for

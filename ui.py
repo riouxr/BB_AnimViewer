@@ -10,7 +10,7 @@
 import os
 
 import bpy
-from bpy.types import Menu, Panel
+from bpy.types import Menu, Panel, UIList
 
 from . import exr
 from . import session
@@ -257,9 +257,55 @@ class BBAV_PT_color(Panel):
         col.label(text="Shared with Render Properties.")
 
 
+class BBAV_UL_sequences(UIList):
+    """One row per version found alongside the sequence currently open."""
+
+    def draw_item(self, context, layout, data, item, icon,
+                  active_data, active_propname, index):
+        if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            split = layout.split(factor=0.6)
+            split.label(text=item.name,
+                       icon='FILE_IMAGE' if item.is_still else 'RENDERLAYERS')
+            row = split.row()
+            row.alignment = 'RIGHT'
+            if item.missing:
+                row.label(text="", icon='ERROR')
+            row.label(text=item.range_text)
+        else:
+            layout.label(text=item.name)
+
+
+class BBAV_PT_list(Panel):
+    bl_idname = "BBAV_PT_list"
+    bl_label = "Sequence List"
+    bl_space_type = 'IMAGE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = "Viewer"
+    # No DEFAULT_CLOSED: expanded by default, unlike Sequence Info below it.
+
+    @classmethod
+    def poll(cls, context):
+        return _in_viewer(context)
+
+    def draw(self, context):
+        layout = self.layout
+        st = context.window_manager.bb_animviewer
+        seq = session.get_sequence()
+        if seq is None:
+            return
+
+        layout.template_list(
+            "BBAV_UL_sequences", "",
+            st, "sequence_list",
+            st, "list_index",
+            rows=6,
+        )
+        layout.operator("bb_animviewer.reload", text="Refresh List", icon='FILE_REFRESH')
+
+
 class BBAV_PT_info(Panel):
     bl_idname = "BBAV_PT_info"
-    bl_label = "Sequence"
+    bl_label = "Sequence Info"
     bl_space_type = 'IMAGE_EDITOR'
     bl_region_type = 'UI'
     bl_category = "Viewer"
@@ -329,6 +375,8 @@ classes = (
     BBAV_PT_range,
     BBAV_PT_channels,
     BBAV_PT_color,
+    BBAV_UL_sequences,
+    BBAV_PT_list,
     BBAV_PT_info,
 )
 

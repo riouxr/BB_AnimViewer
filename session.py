@@ -520,7 +520,67 @@ def open_viewer(context, seq, index=0, space=None):
     apply_frame()
     fit_view()
     start_clock()
+    refresh_sequence_list()
     return None
+
+
+# ── the sequence list ───────────────────────────────────────────────────────
+
+# Sequence objects backing the list, in on-screen order. Kept as module state
+# rather than re-scanning on click because scan() stats a file per sequence;
+# the list panel already paid that cost when it rebuilt.
+_list_cache = []
+
+
+def refresh_sequence_list():
+    """Repopulate the Sequence List from the current sequence's directory.
+
+    Called after every open, and after Reload, so a version rendered under a
+    new name after the viewer was already open shows up without needing the
+    file browser again.
+    """
+    global _list_cache
+    st = settings()
+    if st is None:
+        return
+
+    seq = get_sequence()
+    st.sequence_list.clear()
+    if seq is None:
+        _list_cache = []
+        _set_list_index(st, -1)
+        return
+
+    found = seqmod.scan(seq.directory)
+    _list_cache = found
+    match_index = -1
+    for i, s in enumerate(found):
+        item = st.sequence_list.add()
+        item.name = s.name
+        item.range_text = "still" if s.is_still else "%d - %d" % (s.first, s.last)
+        item.count = s.count
+        item.missing = s.missing
+        item.is_still = s.is_still
+        if s.key == seq.key:
+            match_index = i
+
+    # Through the ID-property dict, like frame_index elsewhere in this module:
+    # it skips the update callback, so re-selecting the matching row here does
+    # not loop back into open_list_index.
+    st["list_index"] = match_index
+
+
+def open_list_index(index):
+    """Open the sequence at *index* of the cached list, in the current host."""
+    if not (0 <= index < len(_list_cache)):
+        return
+    seq = _list_cache[index]
+    current = get_sequence()
+    if current is not None and current.key == seq.key:
+        return                  # already showing it — a click on its own row
+
+    host = viewer_space()
+    open_viewer(bpy.context, seq, 0, space=host)
 
 
 def fit_view():
@@ -559,3 +619,5 @@ def close_viewer(context):
     set_sequence(None)
     if st:
         st.image_name = ""
+        st.sequence_list.clear()
+        st["list_index"] = -1       # ID-property write: no callback to re-enter

@@ -170,6 +170,7 @@ class BBAV_OT_reload(Operator):
         if image:
             image.reload()
         session.apply_frame()
+        session.refresh_sequence_list()
         self.report({'INFO'}, fresh.label())
         return {'FINISHED'}
 

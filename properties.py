@@ -13,7 +13,8 @@
 
 import bpy
 from bpy.props import (
-    BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty,
+    BoolProperty, CollectionProperty, EnumProperty, FloatProperty, IntProperty,
+    StringProperty,
 )
 from bpy.types import PropertyGroup
 
@@ -57,6 +58,29 @@ def refresh_scrub():
     if st and seq and seq.count:
         index = max(0, min(st.frame_index, seq.count - 1))
         session.set_scrub(seq.frames[index])
+
+
+# ── the sequence list ───────────────────────────────────────────────────────
+
+class BBAV_ListItem(PropertyGroup):
+    """One row of the Sequence List: another version found in the same folder.
+
+    'name' is inherited from PropertyGroup as a plain StringProperty.
+    """
+    range_text: StringProperty()
+    count: IntProperty()
+    missing: IntProperty()
+    is_still: BoolProperty()
+
+
+def _list_index_changed(self, context):
+    """*self* is BBAV_Settings: clicking a row opens that version.
+
+    refresh_sequence_list reselects the matching row through the ID-property
+    dict, which bypasses this callback entirely, so nothing here needs to tell
+    a click apart from a programmatic reselect.
+    """
+    session.open_list_index(self.list_index)
 
 
 # ── callbacks ───────────────────────────────────────────────────────────────
@@ -164,12 +188,21 @@ class BBAV_Settings(PropertyGroup):
     range_start: IntProperty(name="In", default=0, min=0, update=_range_changed)
     range_end: IntProperty(name="Out", default=0, min=0, update=_range_changed)
 
+    # ── the sequence list ──────────────────────────────────────────────────
+    sequence_list: CollectionProperty(type=BBAV_ListItem)
+    list_index: IntProperty(
+        name="Sequence List Index",
+        default=-1,
+        update=_list_index_changed,
+        options={'HIDDEN'},
+    )
+
     # ── display ─────────────────────────────────────────────────────────────
     show_channels: BoolProperty(name="Channels", default=True)
     show_info: BoolProperty(name="Sequence Info", default=False)
 
 
-classes = (BBAV_Settings,)
+classes = (BBAV_ListItem, BBAV_Settings)
 
 
 def register():
