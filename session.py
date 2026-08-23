@@ -376,7 +376,9 @@ def start_clock():
 def stop_clock():
     global _timer_live
     _timer_live = False
-    for func in (_tick, _focus_sidebar):
+    global _fit_state
+    _fit_state = None
+    for func in (_tick, _focus_sidebar, _fit_view_deferred):
         if bpy.app.timers.is_registered(func):
             try:
                 bpy.app.timers.unregister(func)
@@ -583,17 +585,130 @@ def open_list_index(index):
     open_viewer(bpy.context, seq, 0, space=host)
 
 
+# fraction of the available space left as breathing room around the image
+_FIT_MARGIN = 0.98
+
+
 def fit_view():
+    """Frame the whole image in the visible area, clear of the sidebar.
+
+    image.view_all(fit_view=True) fits against the WINDOW region, which is the
+    *full* area width regardless of the sidebar — Blender's sidebar is an
+    overlay that floats on top rather than shrinking the region next to it
+    (region.width reports the same value with or without it open, verified).
+    So a plain view_all leaves the right side of the image sitting behind the
+    panel whenever the fit is wide enough to reach it.
+
+    image.size reads (0, 0) until the buffer has actually been decoded, which
+    normally only happens the first time the editor draws for real — too late
+    to compute against synchronously in the same call, and not reliably forced
+    by a single explicit redraw either (verified: even several immediate,
+    scripted redraw_timer calls in a row can still leave a cold-loaded EXR's
+    buffer undecoded). So the correction is deferred the same way
+    _focus_sidebar defers picking the sidebar tab: a short bpy.app.timers
+    retry loop, giving Blender's own redraw cycle the real ticks it needs.
+
+    There is no property to set the view directly — View2D exposes only
+    region_to_view / view_to_region, both read-only queries — so framing goes
+    through view_all first for an immediate rough fit, then, once the buffer
+    is ready, computes exactly which region-pixel border, fit to the *whole*
+    region by view_zoom_border, reproduces the image sized and centred inside
+    the *visible* sub-area instead.
+    """
     for win, area in iter_viewer_areas():
         region = next((r for r in area.regions if r.type == 'WINDOW'), None)
         if region is None:
             continue
+        ui_region = next((r for r in area.regions if r.type == 'UI'), None)
+        space = area.spaces.active
+        ov = dict(window=win, area=area, region=region)
+
         try:
-            with bpy.context.temp_override(window=win, area=area, region=region):
+            with bpy.context.temp_override(**ov):
                 bpy.ops.image.view_all(fit_view=True)
         except RuntimeError:
             pass
+        _start_fit_correction(area, region, ui_region, space, ov)
         return
+
+
+# Deferred fit-correction retry, mirroring _focus_sidebar below.
+_fit_tries = 0
+_fit_state = None
+_FIT_MAX_TRIES = 40
+
+
+def _start_fit_correction(area, region, ui_region, space, override):
+    global _fit_tries, _fit_state
+    _fit_tries = 0
+    _fit_state = (area, region, ui_region, space, override)
+    if not bpy.app.timers.is_registered(_fit_view_deferred):
+        bpy.app.timers.register(_fit_view_deferred, first_interval=0.05)
+
+
+def _fit_view_deferred():
+    global _fit_tries, _fit_state
+    if _fit_state is None:
+        return None
+    area, region, ui_region, space, override = _fit_state
+    _fit_tries += 1
+    try:
+        for r in area.regions:
+            r.tag_redraw()
+        done = _center_in_visible_area(region, ui_region, space, override)
+    except (RuntimeError, ReferenceError):
+        _fit_state = None
+        return None
+
+    if done or _fit_tries >= _FIT_MAX_TRIES:
+        _fit_state = None
+        return None
+    return 0.05
+
+
+def _center_in_visible_area(region, ui_region, space, override):
+    """Try the correction once. True = done (applied, or nothing useful to do
+    and retrying would not help); False = the buffer was not ready, try again.
+    """
+    image = space.image
+    if image is None:
+        return True                     # session ended mid-retry — stop
+    iw, ih = image.size
+    if iw <= 0 or ih <= 0:
+        return False                    # buffer still not decoded — retry
+
+    vw, vh = region.width, region.height
+    sidebar = ui_region.width if (ui_region is not None and space.show_region_ui) else 0
+    avail_w = vw - sidebar
+    if avail_w <= 0 or vh <= 0:
+        return True                     # degenerate window — won't improve on retry
+
+    scale = min(avail_w / iw, vh / ih) * _FIT_MARGIN
+    disp_w, disp_h = iw * scale, ih * scale
+    target_x0 = (avail_w - disp_w) / 2.0
+    target_y0 = (vh - disp_h) / 2.0
+
+    v2d = region.view2d
+    # Solve for the view-space (image-UV) rectangle whose content, once fit to
+    # fill the *whole* region by view_zoom_border, lands the image at
+    # (target_x0, target_y0) sized (disp_w, disp_h) instead of centred in vw.
+    border_view = (
+        -target_x0 / disp_w, -target_y0 / disp_h,
+        (vw - target_x0) / disp_w, (vh - target_y0) / disp_h,
+    )
+    xmin, ymin = v2d.view_to_region(border_view[0], border_view[1], clip=False)
+    xmax, ymax = v2d.view_to_region(border_view[2], border_view[3], clip=False)
+    if xmin == xmax or ymin == ymax:
+        return False                    # view2d not settled yet either — retry
+
+    try:
+        with bpy.context.temp_override(**override):
+            bpy.ops.image.view_zoom_border(
+                xmin=int(xmin), xmax=int(xmax), ymin=int(ymin), ymax=int(ymax),
+                wait_for_input=False, zoom_out=False)
+    except RuntimeError:
+        return True                     # region gone — give up quietly
+    return True
 
 
 def close_viewer(context):

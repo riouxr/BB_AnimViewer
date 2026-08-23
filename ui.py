@@ -144,7 +144,9 @@ class BBAV_PT_transport(Panel):
         row = layout.row(align=True)
         row.operator("bb_animviewer.reload", icon='FILE_REFRESH')
         row.operator("bb_animviewer.fit_view", text="Fit", icon='ZOOM_ALL')
-        layout.operator("bb_animviewer.close", text="Close Viewer", icon='X')
+        # Closing lives in the Render menu (bb_animviewer.close there too) —
+        # not duplicated here, since closing the popup window is one click on
+        # its own titlebar anyway.
 
 
 class BBAV_PT_range(Panel):

@@ -37,6 +37,10 @@ when you render.
   viewer shows the render graded exactly as the render was.
 * **Holes are skipped.** The frame list is the files that are really on disk, so a
   half-finished render steps 1004 → 1007 instead of flashing missing frames.
+* **Fits the whole image clear of the sidebar.** Blender's own View All ▸ Fit fits
+  against the full window width, which the sidebar then overlaps — the right side of
+  a wide image would sit behind the panel. Opening a sequence, or pressing Fit, frames
+  the whole image within the visible area instead.
 * **Reload** re-scans the folder, so you can keep the viewer open while a render
   fills the directory in.
 * **Opens the version you just rendered.** With several versions side by side in one
