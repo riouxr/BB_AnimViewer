@@ -588,6 +588,11 @@ def open_list_index(index):
 # fraction of the available space left as breathing room around the image
 _FIT_MARGIN = 0.98
 
+# The region _apply_border has itself successfully fit before, if any — the
+# signal that a region's view2d is in a settled, known-good state we can
+# safely retarget for a new image without going through view_all first.
+_primed_region = None
+
 
 def fit_view():
     """Frame the whole image in the visible area, clear of the sidebar.
@@ -637,12 +642,14 @@ def fit_view():
 
         path = current_path()
         known_size = seqmod.probe_size(path) if path else None
-
-        try:
-            with bpy.context.temp_override(**ov):
-                bpy.ops.image.view_all(fit_view=True)
-        except RuntimeError:
-            pass
+        # view_all is NOT called here. Calling it synchronously, before
+        # returning control to Blender, means it is what a screen actually
+        # gets to present the next time Blender's own idle loop repaints —
+        # verified: even though nothing here ever explicitly asks for a
+        # buffer swap, that rough fit still reaches the display before the
+        # deferred correction does, which is the flash by itself, priming
+        # aside. So establishing the baseline moves into the deferred tick
+        # too, alongside the correction — see _fit_view_deferred.
         _start_fit_correction(area, region, ui_region, space, ov, known_size)
         return
 
@@ -668,8 +675,20 @@ def _fit_view_deferred():
     area, region, ui_region, space, override, known_size = _fit_state
     _fit_tries += 1
     try:
+        # Establishes the view2d baseline the same way plain view_all always
+        # did, just no longer synchronously in fit_view() — every call in this
+        # whole sequence, on both counts below, only ever asks Blender to
+        # redraw (DRAW_WIN), never to swap the buffer to the screen, so the
+        # rough fit this produces is never itself what a screen presents.
         for r in area.regions:
             r.tag_redraw()
+        try:
+            with bpy.context.temp_override(**override):
+                bpy.ops.image.view_all(fit_view=True)
+                bpy.ops.wm.redraw_timer(type='DRAW_WIN', iterations=1)
+        except RuntimeError:
+            pass
+
         if known_size:
             done = _apply_border(region, ui_region, space, override, *known_size)
         else:
@@ -705,7 +724,7 @@ def _apply_border(region, ui_region, space, override, iw, ih):
         ui_region.tag_redraw()
     try:
         with bpy.context.temp_override(**override):
-            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN', iterations=1)
     except RuntimeError:
         pass
 
